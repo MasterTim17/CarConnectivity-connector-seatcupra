@@ -65,7 +65,7 @@ class SeatCupraElectricVehicle(ElectricVehicle, SeatCupraVehicle):
         else:
             super().__init__(vin=vin, garage=garage, managing_connector=managing_connector)
             self.charging: Charging = SeatCupraCharging(vehicle=self, origin=self.charging)
-
+       
 
 class SeatCupraCombustionVehicle(CombustionVehicle, SeatCupraVehicle):
     """
@@ -77,7 +77,7 @@ class SeatCupraCombustionVehicle(CombustionVehicle, SeatCupraVehicle):
             super().__init__(garage=garage, origin=origin)
         else:
             super().__init__(vin=vin, garage=garage, managing_connector=managing_connector)
-
+       
 
 class SeatCupraHybridVehicle(HybridVehicle, SeatCupraVehicle):
     """
@@ -89,3 +89,4 @@ class SeatCupraHybridVehicle(HybridVehicle, SeatCupraVehicle):
             super().__init__(garage=garage, origin=origin)
         else:
             super().__init__(vin=vin, garage=garage, managing_connector=managing_connector)
+            

@@ -16,13 +16,13 @@ from carconnectivity.garage import Garage
 from carconnectivity.errors import AuthenticationError, TooManyRequestsError, RetrievalError, APIError, APICompatibilityError, \
     TemporaryAuthenticationError, SetterError, CommandError
 from carconnectivity.util import robust_time_parse, log_extra_keys, config_remove_credentials
-from carconnectivity.units import Length, Current
+from carconnectivity.units import Length, Current, Minutes, Speed, FuelConsumption, ElectricConsumption
 from carconnectivity.doors import Doors
 from carconnectivity.windows import Windows
 from carconnectivity.lights import Lights
 from carconnectivity.drive import GenericDrive, ElectricDrive, CombustionDrive, DieselDrive
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle
-from carconnectivity.attributes import BooleanAttribute, DurationAttribute, GenericAttribute, TemperatureAttribute, EnumAttribute, CurrentAttribute, \
+from carconnectivity.attributes import BooleanAttribute, MinutesAttribute, GenericAttribute, TemperatureAttribute, EnumAttribute, CurrentAttribute, \
     LevelAttribute
 from carconnectivity.units import Temperature
 from carconnectivity.command_impl import ClimatizationStartStopCommand, WakeSleepCommand, HonkAndFlashCommand, LockUnlockCommand, ChargingStartStopCommand, \
@@ -82,7 +82,7 @@ class Connector(BaseConnector):
 
         self.connection_state: EnumAttribute = EnumAttribute(name="connection_state", parent=self, value_type=ConnectionState,
                                                              value=ConnectionState.DISCONNECTED, tags={'connector_custom'})
-        self.interval: DurationAttribute = DurationAttribute(name="interval", parent=self, tags={'connector_custom'})
+        self.interval: MinutesAttribute = MinutesAttribute(name="interval", parent=self, tags={'connector_custom'})
         self.interval.minimum = timedelta(seconds=180)
         self.interval._is_changeable = True  # pylint: disable=protected-access
 
@@ -291,6 +291,7 @@ class Connector(BaseConnector):
                 vehicle_to_update = self.fetch_vehicle_status(vehicle_to_update)
                 vehicle_to_update = self.fetch_vehicle_mycar_status(vehicle_to_update)
                 vehicle_to_update = self.fetch_mileage(vehicle_to_update)
+                vehicle_to_update = self.fetch_last_trip(vehicle_to_update)
                 vehicle_to_update = self.fetch_ranges(vehicle_to_update)
                 if vehicle_to_update.capabilities.has_capability('climatisation', check_status_ok=True):
                     vehicle_to_update = self.fetch_climatisation(vehicle_to_update)
@@ -860,6 +861,54 @@ class Connector(BaseConnector):
             vehicle.odometer._set_value(None)  # pylint: disable=protected-access
         return vehicle
 
+    def fetch_last_trip(self, vehicle: SeatCupraVehicle, no_cache: bool = False) -> SeatCupraVehicle:
+        vin = vehicle.vin.value
+        if vin is None:
+            raise APIError('VIN is missing')
+        url = f'https://ola.prod.code.seat.cloud.vwgroup.com/v1/vehicles/{vin}/'
+        startDate = (datetime.now() - timedelta(days= 90)).strftime('%Y-%m-%d')
+        # url = url+f'driving-data/SHORT?from={startDate}T00:00:00Z&to=2099-12-31T09:59:01Z'
+        url = url+f'driving-data/SHORT'
+        # url = url+f'driving-data/CYCLIC?from={startDate}T00:00:00Z&to=2099-12-31T09:59:01Z'
+        # {'ranges': [{'rangeName': 'gasolineRangeKm', 'value': 100.0}, {'rangeName': 'electricRangeKm', 'value': 28.0}]}
+        data: Dict[str, Any] | None = self._fetch_data(url=url, session=self.session, no_cache=no_cache)
+
+        # data contains array of last x days trip data like this:
+        # {
+        #     "tripId": "4515254570",
+        #     "tripEndTimestamp": "2025-06-11T20: 41: 32Z",
+        #     "tripType": "SHORT",
+        #     "vehicleType": "HYBRID",
+        #     "mileageKm": 1,
+        #     "startMileageKm": 39291,
+        #     "overallMileageKm": 39293,
+        #     "travelTime": 3,
+        #     "averageFuelConsumption": 0.0,
+        #     "averageElectricConsumption": 41.3,
+        #     "averageAuxConsumption": None,
+        #     "averageRecuperation": None,
+        #     "averageGasConsumption": None,
+        #     "averageSpeedKmph": 23
+        # }
+
+        if data is not None:
+            if data["data"][-1] is not None:
+                if data["data"][-1].get("mileageKm") is not None: # last trip mileageKm
+                    vehicle.drives.last_trip_distance._set_value(data["data"][-1]["mileageKm"],unit=Length.KM)
+                if data["data"][-1].get("averageSpeedKmph") is not None: # last trip averageSpeedKmph
+                    vehicle.drives.last_trip_average_speed._set_value(data["data"][-1]["averageSpeedKmph"],unit=Speed.KMH)
+                if data["data"][-1].get("travelTime") is not None: # last trip travelTime
+                    vehicle.drives.last_trip_duration._set_value(data["data"][-1]["travelTime"],unit=Minutes.MIN)
+                for drive in vehicle.drives.drives.values():
+                    if isinstance(drive, CombustionDrive):
+                        if data["data"][-1].get("averageFuelConsumption") is not None: # last trip averageFuelConsumption
+                            drive.last_trip_fuel_consumption._set_value(data["data"][-1]["averageFuelConsumption"],unit=FuelConsumption.L)
+                    if isinstance(drive, ElectricDrive):
+                        if data["data"][-1].get("averageElectricConsumption") is not None: # last trip averageElectricConsumption
+                            drive.last_trip_electric_consumption._set_value(data["data"][-1]["averageElectricConsumption"],unit=ElectricConsumption.KWH)
+                LOG_API.info(f'https://ola.prod.code.seat.cloud.vwgroup.com/v1/vehicles/{vin}/trip %s', data["data"][-3:])
+        return vehicle
+    
     def fetch_ranges(self, vehicle: SeatCupraVehicle, no_cache: bool = False) -> SeatCupraVehicle:
         vin = vehicle.vin.value
         if vin is None:
